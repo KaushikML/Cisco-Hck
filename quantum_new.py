@@ -1,262 +1,224 @@
+# save as app.py   ───  streamlit run app.py
 import streamlit as st
 import networkx as nx
 import matplotlib.pyplot as plt
-import random
-import numpy as np
-import math
+import random, numpy as np, math
+plt.style.use("default")           # cleaner default look for Colab/Streamlit
 
-# --- Constants and Simulation Parameters ---
-L0 = 2.5  # Characteristic decoherence length
-TRANSLATION_COST = 0.1 # Cost penalty for switching between quantum/classical domains
+# ========== CONSTANTS & DEFAULTS ==========
+L0 = 2.5
+TRANSLATION_COST = 0.1
+DEFAULT_WEIGHTS = dict(w1=1.0, w2=0.01, w3=2.0, w4=0.05)
 
-# --- Core Network and Protocol Functions from your script ---
-
+# ───────────────────────────────────────────
+#  PART 1  – NETWORK GENERATION + FIXERS
+# ───────────────────────────────────────────
 def create_hybrid_network(num_nodes=12, quantum_ratio=0.4, seed=42):
-    """Creates a hybrid network graph."""
+    random.seed(seed); np.random.seed(seed)
     G = nx.erdos_renyi_graph(num_nodes, 0.4, seed=seed)
-    # Ensure there are at least two classical nodes for routing
-    num_quantum = int(num_nodes * quantum_ratio)
-    if num_nodes - num_quantum < 2:
-        num_quantum = max(0, num_nodes - 2)
-
-    quantum_nodes = random.sample(list(G.nodes), num_quantum)
-    for node in G.nodes:
-        G.nodes[node]['type'] = 'quantum' if node in quantum_nodes else 'classical'
+    q_nodes = random.sample(list(G.nodes), int(num_nodes*quantum_ratio))
+    for n in G.nodes:
+        G.nodes[n]["type"] = "quantum" if n in q_nodes else "classical"
     return G
 
+def connect_quantum_subgraph(G):
+    q_nodes = [n for n,d in G.nodes(data=True) if d["type"]=="quantum"]
+    comps = list(nx.connected_components(G.subgraph(q_nodes)))
+    for i in range(len(comps)-1):
+        u, v = next(iter(comps[i])), next(iter(comps[i+1]))
+        G.add_edge(u, v)
+    return G
+
+def ensure_classical_two_quantum(G):
+    q_nodes = [n for n,d in G.nodes(data=True) if d["type"]=="quantum"]
+    for c in [n for n,d in G.nodes(data=True) if d["type"]=="classical"]:
+        q_neigh = [nbr for nbr in G.neighbors(c) if G.nodes[nbr]["type"]=="quantum"]
+        need = 2 - len(q_neigh)
+        if need > 0:
+            cand = list(set(q_nodes)-set(q_neigh))
+            for q in random.sample(cand, k=min(need, len(cand))):
+                G.add_edge(c, q)
+    return G
+
+# ───────────────────────────────────────────
+#  PART 2  – EDGE ANNOTATION
+# ───────────────────────────────────────────
 def assign_link_behaviors(G, pos):
-    """Annotates all edges with realistic parameters."""
-    for u, v in G.edges():
-        distance = float(np.hypot(*(np.array(pos[u]) - np.array(pos[v]))))
-        utype, vtype = G.nodes[u]["type"], G.nodes[v]["type"]
+    for u,v in G.edges():
+        d = float(np.hypot(*(np.array(pos[u])-np.array(pos[v]))))
+        ut, vt = G.nodes[u]["type"], G.nodes[v]["type"]
 
-        if utype == 'quantum' and vtype == 'quantum':
-            G.edges[u, v].update({
-                "type": "quantum", "distance": distance,
-                "decoherence_prob": 1 - np.exp(-distance / L0),
-                "entanglement_success": max(0.05, np.exp(-0.3 * distance)),
-            })
-        elif utype == 'classical' and vtype == 'classical':
-            G.edges[u, v].update({
-                "type": "classical", "distance": distance,
-                "latency_ms": random.uniform(1, 10),
-                "packet_loss": random.uniform(0.01, 0.05),
-            })
-        else: # Hybrid links
-             G.edges[u, v].update({
-                "type": "hybrid", "distance": distance,
-                "latency_ms": random.uniform(2, 15),
-                "fidelity": random.uniform(0.7, 0.99), # C->Q
-                "packet_loss": random.uniform(0.02, 0.08), # Q->C
-            })
+        if ut==vt=="quantum":
+            G.edges[u,v].update(dict(type="quantum", distance=d,
+                decoherence_prob=1-np.exp(-d/L0),
+                entanglement_success=max(0.05, np.exp(-0.3*d))))
+        elif ut==vt=="classical":
+            G.edges[u,v].update(dict(type="classical", distance=d,
+                latency_ms=random.uniform(1,10),
+                packet_loss=random.uniform(0.01,0.05),
+                amplification_allowed=True))
+        elif ut=="quantum" and vt=="classical":
+            G.edges[u,v].update(dict(type="hybrid_QC", distance=d,
+                latency_ms=random.uniform(2,15),
+                packet_loss=random.uniform(0.02,0.08)))
+        else:  # C→Q
+            G.edges[u,v].update(dict(type="hybrid_CQ", distance=d,
+                latency_ms=random.uniform(2,15),
+                fidelity=random.uniform(0.7,0.99),
+                loss_prob=random.uniform(0.02,0.08)))
     return G
 
-def get_edge_success_prob(attrs):
-    """Calculates the success probability for a single edge."""
-    etype = attrs["type"]
-    if etype == "quantum":
-        return (1 - attrs["decoherence_prob"]) * attrs["entanglement_success"]
-    elif etype == "classical":
-        return 1 - attrs["packet_loss"]
-    elif etype == "hybrid":
-        # Simplified for demonstration; a real model would be more complex
-        return attrs.get("fidelity", 0.95) * (1 - attrs.get("packet_loss", 0.05))
+# success-prob
+def edge_success(a):
+    t=a["type"]
+    if t=="quantum":   return (1-a["decoherence_prob"])*a["entanglement_success"]
+    if t=="classical": return 1-a["packet_loss"]
+    if t=="hybrid_QC": return (1-a["packet_loss"])*0.95
+    if t=="hybrid_CQ": return a["fidelity"]*(1-a["loss_prob"])
     return 0.0
+def edge_latency(a):   return a.get("latency_ms", 0.0)
 
-def has_qkd_segment(G, path):
-    """Checks if a path contains at least one quantum-quantum link."""
-    for i in range(len(path) - 1):
-        u, v = path[i], path[i+1]
-        if G.nodes[u]["type"] == "quantum" and G.nodes[v]["type"] == "quantum":
-            return True
-    return False
+# ───────────────────────────────────────────
+#  PART 3  – AQFR ROUTING
+# ───────────────────────────────────────────
+def has_quantum_link(G, path):
+    return any(G[u][v]["type"]=="quantum" for u,v in zip(path,path[1:]))
 
-def classify_path(G, path):
-    """Categorizes a path based on its links."""
-    if has_qkd_segment(G, path):
-        return "Quantum-QKD"
-    
-    has_hybrid = any("hybrid" in G.edges[path[i], path[i+1]].get("type", "") for i in range(len(path) - 1))
-    if has_hybrid:
-        return "Hybrid"
+def has_two_consecutive_q_between_c(G, path):
+    c_idx=[i for i,n in enumerate(path) if G.nodes[n]["type"]=="classical"]
+    for i in range(len(c_idx)-1):
+        seg = path[c_idx[i]+1:c_idx[i+1]]
+        best=streak=0
+        for n in seg:
+            if G.nodes[n]["type"]=="quantum":
+                streak+=1; best=max(best,streak)
+            else: streak=0
+        if best<2: return False
+    return True
+
+def classify_path(G,path):
+    hybrid=any("hybrid" in G[u][v]["type"] for u,v in zip(path,path[1:]))
+    classical=any(G[u][v]["type"]=="classical" for u,v in zip(path,path[1:]))
+    if has_quantum_link(G,path): return "Quantum-QKD"
+    if hybrid:                   return "Hybrid"
+    if classical:                return "Classical"
     return "Classical"
 
-def compute_path_metrics(G, path):
-    """Computes all relevant metrics for a given path."""
-    total_success = 1.0
-    total_distance = 0.0
-    translations = 0
-    prev_domain = G.nodes[path[0]]["type"]
+def compute_metrics(G,path):
+    succ=1; dist=lat=0; hops=len(path)-1; trans=0
+    prev_dom=G.nodes[path[0]]["type"]
+    for u,v in zip(path,path[1:]):
+        a=G[u][v]
+        succ*=edge_success(a); dist+=a["distance"]; lat+=edge_latency(a)
+        if G.nodes[v]["type"]!=prev_dom: trans+=1
+        prev_dom=G.nodes[v]["type"]
+    return hops,dist,lat,succ,trans
 
-    for i in range(len(path) - 1):
-        u, v = path[i], path[i+1]
-        attrs = G.edges[u, v]
-        total_success *= get_edge_success_prob(attrs)
-        total_distance += attrs["distance"]
-        
-        curr_domain = G.nodes[v]["type"]
-        if curr_domain != prev_domain:
-            translations += 1
-        prev_domain = curr_domain
-        
-    return len(path) - 1, total_distance, total_success, translations
+def cost(h,d,succ,trans,lat,w):
+    return w['w1']*h + w['w2']*d - w['w3']*succ + TRANSLATION_COST*trans + w['w4']*lat
 
-def path_cost(hops, distance, reliability, translations, weights):
-    """Calculates the final cost score for a path."""
-    return (weights['w1'] * hops) + (weights['w2'] * distance) - (weights['w3'] * reliability) + (translations * TRANSLATION_COST)
+def best_path(G, paths, w):
+    return min(paths, key=lambda p: cost(*compute_metrics(G,p), w))
 
-def choose_best_path(G, paths, weights):
-    """Selects the path with the lowest cost from a list of candidates."""
-    best_path, best_score = None, float("inf")
-    for path in paths:
-        hops, dist, success, translations = compute_path_metrics(G, path)
-        cost = path_cost(hops, dist, success, translations, weights)
-        if cost < best_score:
-            best_score, best_path = cost, path
-    return best_path
+def aqfr_route(G, src, dst, w, cutoff=8):
+    try: all_p=list(nx.all_simple_paths(G,src,dst,cutoff))
+    except (nx.NodeNotFound,nx.NetworkXNoPath): return None,"No Path"
+    if not all_p: return None,"No Path"
 
-def aqfr_route(G, src, dst, weights, cutoff=8):
-    """Main AQFR routing algorithm."""
-    try:
-        all_paths = list(nx.all_simple_paths(G, src, dst, cutoff=cutoff))
-    except (nx.NodeNotFound, nx.NetworkXNoPath):
-        return None, "No Path"
+    q_paths  =[p for p in all_p if classify_path(G,p)=="Quantum-QKD" and has_two_consecutive_q_between_c(G,p)]
+    if q_paths:  return best_path(G,q_paths,w),"Quantum-QKD"
 
-    if not all_paths:
-        return None, "No Path"
+    h_paths  =[p for p in all_p if classify_path(G,p)=="Hybrid" and has_two_consecutive_q_between_c(G,p)]
+    if h_paths: return best_path(G,h_paths,w),"Hybrid"
 
-    qkd_paths, hybrid_paths, classical_paths = [], [], []
-    for p in all_paths:
-        ptype = classify_path(G, p)
-        if ptype == "Quantum-QKD":
-            qkd_paths.append(p)
-        elif ptype == "Hybrid":
-            hybrid_paths.append(p)
-        else:
-            classical_paths.append(p)
+    return None,"No Path"
 
-    if qkd_paths:
-        return choose_best_path(G, qkd_paths, weights), "Quantum-QKD"
-    elif hybrid_paths:
-        return choose_best_path(G, hybrid_paths, weights), "Hybrid"
-    elif classical_paths:
-        return choose_best_path(G, classical_paths, weights), "Classical"
-    return None, "No Path"
-
-def visualize_network(G, pos, best_path=None, path_type=None):
-    """Draws the network graph and highlights the selected path."""
-    fig, ax = plt.subplots(figsize=(14, 10))
-    
-    edge_color_map = {"quantum": "cyan", "classical": "gray", "hybrid": "purple"}
-    edge_colors = [edge_color_map.get(G.edges[e].get("type", "classical"), "gray") for e in G.edges]
-
-
-    nx.draw(G, pos, with_labels=True,
-            node_color=["skyblue" if d["type"] == "quantum" else "orange" for _, d in G.nodes(data=True)],
-            edge_color=edge_colors, width=1.5, node_size=2500, font_size=10, font_weight='bold', ax=ax)
-
-    if best_path:
-        path_edges = list(zip(best_path, best_path[1:]))
-        nx.draw_networkx_edges(G, pos, edgelist=path_edges, edge_color="red", width=4, ax=ax)
-        ax.set_title(f"AQFR Selected Path ({path_type})", fontsize=16)
-    else:
-        ax.set_title("Hybrid Network Topology", fontsize=16)
-        
-    return fig
-
-# --- Function to generate and store the network in session state ---
-def generate_and_store_network(num_nodes, quantum_ratio, seed):
-    """Generates a new network and stores it and its layout in the session state."""
-    G = create_hybrid_network(num_nodes, quantum_ratio, seed)
-    pos = nx.spring_layout(G, seed=seed)
-    G = assign_link_behaviors(G, pos)
-    st.session_state.G = G
-    st.session_state.pos = pos
-    st.session_state.best_path = None
-    st.session_state.category = None
-
-
-# --- Streamlit App UI ---
-
+# ───────────────────────────────────────────
+#  STREAMLIT UI
+# ───────────────────────────────────────────
 st.set_page_config(layout="wide")
-st.title("🛰️ AQFR: Adaptive Quantum-First Routing Simulator")
+st.title("🛰️ AQFR - Adaptive Quantum-First Routing Simulator")
 
-# --- Sidebar for Controls ---
+# Sidebar – network parameters
 with st.sidebar:
-    st.header("🌐 Network Generation")
-    seed = st.number_input("Random Seed", value=42)
-    num_nodes = st.slider("Total Nodes", 5, 30, 12)
-    quantum_ratio = st.slider("Quantum Node Ratio", 0.1, 1.0, 0.4)
+    st.header("🌐 Network parameters")
+    seed = st.number_input("Random seed", 0, 9999, 42)
+    num_nodes = st.slider("Total nodes", 5, 30, 12)
+    q_ratio   = st.slider("Quantum node ratio", 0.1, 1.0, 0.4)
 
-    if st.button("Generate New Network"):
-        generate_and_store_network(num_nodes, quantum_ratio, seed)
-        
-    # Initialize state on first run
-    if 'G' not in st.session_state:
-        generate_and_store_network(num_nodes, quantum_ratio, seed)
+    if st.button("Generate network"):
+        G = create_hybrid_network(num_nodes,q_ratio,seed)
+        G = connect_quantum_subgraph(G)
+        G = ensure_classical_two_quantum(G)
+        pos = nx.spring_layout(G, seed=seed)
+        G = assign_link_behaviors(G,pos)
+        st.session_state.update(dict(G=G,pos=pos,best=None,cat=None))
 
-    G = st.session_state.G
-    pos = st.session_state.pos
-    
-    # Filter for classical nodes for source/destination selection
-    classical_node_list = sorted([n for n, d in G.nodes(data=True) if d['type'] == 'classical'])
+    if "G" not in st.session_state:
+        st.session_state.G,st.session_state.pos = None,None
 
-    st.header("⚙️ Routing Controls")
-    
-    if len(classical_node_list) < 2:
-        st.warning("Not enough classical nodes for routing. Please generate a new network with a lower quantum ratio.")
-        source_node, dest_node = None, None
-    else:
-        source_node = st.selectbox("Select Source Node (Classical Only)", classical_node_list, index=0)
-        dest_node = st.selectbox("Select Destination Node (Classical Only)", classical_node_list, index=len(classical_node_list)-1)
+    st.header("⚙️ Routing weights")
+    weights={}
+    for k,default in DEFAULT_WEIGHTS.items():
+        lbl = dict(w1="Hop weight",w2="Distance weight",
+                   w3="Reliability weight",w4="Latency weight")[k]
+        step=0.01 if k=="w2" else 0.1
+        weights[k]=st.slider(lbl,0.0,5.0 if k!="w4" else 1.0,default,step=step)
 
+# ===== main columns =====
+col1,col2 = st.columns([1,1.5])
 
-    st.subheader("Protocol Weights")
-    w1 = st.slider("Hop Count Weight", 0.0, 5.0, 1.0)
-    w2 = st.slider("Distance Weight", 0.0, 1.0, 0.01, format="%.3f")
-    w3 = st.slider("Reliability Weight", 0.0, 10.0, 2.0)
-    w4 = st.slider("Decoherence Probability", 0.0, 1.0, 0.1, format="%.2f")
-    w5 = st.slider("Entanglement success probability", 0.0, 1.0, 0.5, format="%.2f")
-    
-    weights = {'w1': w1, 'w2': w2, 'w3': w3, 'w4': w4, 'w5': w5}
-
-# --- Main Display Area ---
-col1, col2 = st.columns([1, 1.5])
-
+# Route controls + metrics
 with col1:
-    st.subheader("📍 Routing Results")
-    
-    best_path = None
-    category = None
-
-    if source_node is not None and dest_node is not None and source_node != dest_node:
-        best_path, category = aqfr_route(G, source_node, dest_node, weights)
-
-        if best_path:
-            st.success(f"Found best path in category: **{category}**")
-            hops, dist, success, translations = compute_path_metrics(G, best_path)
-            
-            st.write(f"**Path:** `{' -> '.join(map(str, best_path))}`")
-            st.metric("Hop Count", hops)
-            st.metric("Total Distance", f"{dist:.2f}")
-            st.metric("End-to-End Success Probability", f"{success:.2%}")
-            st.metric("Domain Switches (Q <-> C)", translations)
-
-            with st.expander("View Hop-by-Hop Details"):
-                for i in range(len(best_path) - 1):
-                    u, v = best_path[i], best_path[i+1]
-                    attrs = G.edges[u,v]
-                    edge_success = get_edge_success_prob(attrs)
-                    st.text(f"{u} -> {v} [{attrs['type']}]: Success Prob = {edge_success:.3f}")
-        else:
-            st.error("No path found between the selected nodes.")
-    elif source_node == dest_node:
-        st.warning("Source and destination must be different.")
+    st.subheader("📍 Routing")
+    G=st.session_state.G
+    if G is None:
+        st.info("Click **Generate network** first.")
     else:
-        st.error("Cannot perform routing without at least two classical nodes.")
+        classical_nodes=[n for n,d in G.nodes(data=True) if d["type"]=="classical"]
+        if len(classical_nodes)<2:
+            st.error("Need at least two classical nodes to route.")
+        else:
+            src=st.selectbox("Source (classical)",classical_nodes,0)
+            dst=st.selectbox("Destination (classical)",classical_nodes,1)
+            if src==dst:
+                st.warning("Pick distinct nodes.")
+            else:
+                path,cat=aqfr_route(G,src,dst,weights)
+                st.session_state.best,st.session_state.cat=path,cat
+                if path:
+                    hops,dist,lat,succ,trans=compute_metrics(G,path)
+                    st.success(f"Path found ({cat})")
+                    st.write("→".join(map(str,path)))
+                    st.metric("Hop count",hops)
+                    st.metric("Distance",f"{dist:.2f}")
+                    st.metric("E2E success",f"{succ:.2%}")
+                    st.metric("Domain switches",trans)
+                    with st.expander("Hop-by-hop"):
+                        for u,v in zip(path,path[1:]):
+                            st.write(f"{u} → {v} [{G[u][v]['type']}]  "
+                                     f"succ={edge_success(G[u][v]):.3f}")
+                else:
+                    st.error("No valid path under constraints.")
 
-
+# Visual column
 with col2:
-    st.subheader("🗺️ Network Visualization")
-    fig = visualize_network(G, pos, best_path, category)
-    st.pyplot(fig)
+    st.subheader("🗺️ Network")
+    if st.session_state.G is not None:
+        fig = plt.figure(figsize=(10,7))
+        G,pos = st.session_state.G, st.session_state.pos
+        edge_cmap={"quantum":"cyan","classical":"gray",
+                   "hybrid_QC":"purple","hybrid_CQ":"magenta"}
+        ec=[edge_cmap[G[e[0]][e[1]]["type"]] for e in G.edges]
+        nc=["skyblue" if d["type"]=="quantum" else "orange"
+             for _,d in G.nodes(data=True)]
+        nx.draw(G,pos,node_color=nc,edge_color=ec,
+                node_size=1400,font_size=10,with_labels=True,width=2)
+        # highlight path
+        if st.session_state.best:
+            pe=list(zip(st.session_state.best,st.session_state.best[1:]))
+            nx.draw_networkx_edges(G,pos,edgelist=pe,edge_color="red",width=4)
+            plt.title(f"AQFR path ({st.session_state.cat})")
+        else:
+            plt.title("Hybrid network topology")
+        st.pyplot(fig)
