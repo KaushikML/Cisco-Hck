@@ -146,6 +146,18 @@ def aqfr_route(G,src,dst,w,cutoff=8):
         return best_path(G,c_tier,w),"Classical"
     return None,"No valid path"
 
+# ───────── NEW: Shortest classical-only path ────────────────
+def shortest_classical_path(G, src, dst):
+    # create a subgraph with only classical edges
+    classical_edges = [(u,v) for u,v,d in G.edges(data=True)
+                       if d["type"]=="classical"]
+    G_classical = nx.Graph()
+    G_classical.add_edges_from(classical_edges)
+    if nx.has_path(G_classical, src, dst):
+        return nx.shortest_path(G_classical, src, dst)
+    else:
+        return None
+
 # ───────── Streamlit UI ────────────────────────────────────────────────────
 st.set_page_config(layout="wide")
 st.title("🛰️ AQFR – Quantum-Only-Intermediates Routing Demo")
@@ -161,7 +173,7 @@ with st.sidebar:
         G0 = ensure_classical_two_q(G0)
         pos = nx.spring_layout(G0, seed=seed)
         G0 = annotate_edges(G0,pos)
-        st.session_state.update(dict(G=G0,pos=pos,best=None,cat=None))
+        st.session_state.update(dict(G=G0,pos=pos,best=None,cat=None,shortest_classical=None))
     if "G" not in st.session_state:
         st.info("Press **Generate / Reset** to start.")
 
@@ -188,38 +200,69 @@ if "G" in st.session_state:
             if src==dst:
                 st.warning("Pick distinct nodes.")
             else:
+                # AQFR route
                 path,cat=aqfr_route(G,src,dst,W)
                 st.session_state.best,st.session_state.cat=path,cat
+
+                # Baseline shortest classical-only path
+                shortest_classic = shortest_classical_path(G, src, dst)
+                st.session_state.shortest_classical = shortest_classic
+
+                # Display AQFR path details
                 if path:
                     hops,dist,lat,succ,trans,loss=compute_metrics(G,path)
                     st.success(f"{cat} path found")
-                    st.write(" → ".join(map(str,path)))
+                    st.write("**AQFR Path:** " + " → ".join(map(str,path)))
                     st.metric("Hops",hops)
                     st.metric("Distance",f"{dist:.2f}")
                     st.metric("Success",f"{succ:.2%}")
                     st.metric("Switches",trans)
-                    with st.expander("Details"):
+                    with st.expander("Hop-by-hop details"):
                         for u,v in zip(path,path[1:]):
                             st.write(f"{u}→{v} [{G[u][v]['type']}] "
                                      f"P={edge_success(G[u][v]):.3f}")
                 else:
                     st.error(cat)
 
+                # Display baseline shortest classical path
+                if shortest_classic:
+                    st.info("**Shortest Classical Path:** " +
+                            " → ".join(map(str,shortest_classic)))
+                    # Compute its metrics
+                    hops_c,dist_c,lat_c,succ_c,trans_c,loss_c=compute_metrics(G,shortest_classic)
+                    st.write(f"Baseline Classical Metrics: "
+                             f"Hops={hops_c}, Dist={dist_c:.2f}, "
+                             f"Succ={succ_c:.2%}, Loss={loss_c:.3f}")
+                else:
+                    st.warning("No purely classical shortest path available.")
+
     with col2:
         st.subheader("Topology")
         fig=plt.figure(figsize=(9,7))
         ecmap={"quantum":"cyan","classical":"grey",
                "hybrid_QC":"purple","hybrid_CQ":"magenta"}
+        # draw base network
         nx.draw(G,pos,
                 node_color=["skyblue" if d["type"]=="quantum"
                             else "orange" for _,d in G.nodes(data=True)],
                 edge_color=[ecmap[G[e[0]][e[1]]["type"]] for e in G.edges],
                 node_size=1200,font_size=9,width=1.8)
+
+        # Draw AQFR path in red
         if st.session_state.best:
             pe=list(zip(st.session_state.best,st.session_state.best[1:]))
             nx.draw_networkx_edges(G,pos,edgelist=pe,edge_color="red",width=4)
             nx.draw_networkx_labels(G,pos)
-            plt.title(f"AQFR path ({st.session_state.cat})")
+
+        # Draw baseline shortest classical path in green dashed
+        if st.session_state.shortest_classical:
+            pe_classic = list(zip(st.session_state.shortest_classical,
+                                  st.session_state.shortest_classical[1:]))
+            nx.draw_networkx_edges(G,pos,edgelist=pe_classic,
+                                   edge_color="green",width=3,style="dashed")
+
+        if st.session_state.best:
+            plt.title(f"AQFR path ({st.session_state.cat}) + Shortest Classical (green dashed)")
         else:
             plt.title("Hybrid network")
         st.pyplot(fig)
