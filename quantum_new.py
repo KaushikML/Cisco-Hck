@@ -218,6 +218,7 @@ if "G" in st.session_state:
         if st.session_state.best:
             pe=list(zip(st.session_state.best,st.session_state.best[1:]))
             nx.draw_networkx_edges(G,pos,edgelist=pe,edge_color="red",width=4)
+            nx.draw_networkx_labels(G,pos)
             plt.title(f"AQFR path ({st.session_state.cat})")
         else:
             plt.title("Hybrid network")
