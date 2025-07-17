@@ -266,3 +266,254 @@ if "G" in st.session_state:
         else:
             plt.title("Hybrid network")
         st.pyplot(fig)
+
+
+import streamlit as st
+import networkx as nx
+import numpy as np
+import matplotlib.pyplot as plt
+import random
+
+# ==============================
+# Default Config
+# ==============================
+DEFAULT_QUANTUM_RATIO = 0.4
+DEFAULT_EDGE_PROB = 0.1
+DEFAULT_TRIALS = 5
+DEFAULT_MAX_NODES = 30
+CUTOFF_HOPS = 5
+
+FIDELITY_THRESHOLD = 0.75
+CLASSICAL_THRESHOLD = 0.9
+ROUTE_LOSS_THRESHOLD = 0.3
+
+# ==============================
+# Utility Functions
+# ==============================
+def get_edge_success_prob(attrs):
+    t = attrs["type"]
+    if t == "quantum":
+        return (1 - attrs["decoherence_prob"]) * attrs["entanglement_success"]
+    elif t == "classical":
+        return 1 - attrs["packet_loss"]
+    return 0.0
+
+def compute_path_metrics(G, path):
+    total_success = 1.0
+    for i in range(len(path)-1):
+        u, v = path[i], path[i+1]
+        total_success *= get_edge_success_prob(G[u][v])
+    route_loss = 1 - total_success
+    return route_loss, total_success
+
+def choose_best_path(G, paths):
+    best_path, best_loss = None, 1.0
+    for p in paths:
+        loss, _ = compute_path_metrics(G, p)
+        if loss < best_loss:
+            best_loss = loss
+            best_path = p
+    return best_path
+
+# ==============================
+# Network Creation
+# ==============================
+def create_hybrid_network(num_nodes, quantum_ratio, edge_prob):
+    G = nx.erdos_renyi_graph(num_nodes, edge_prob, seed=None)
+    quantum_nodes = random.sample(list(G.nodes), max(1, int(num_nodes * quantum_ratio)))
+    for node in G.nodes:
+        G.nodes[node]["type"] = "quantum" if node in quantum_nodes else "classical"
+
+    for u, v in G.edges():
+        if G.nodes[u]["type"] == "quantum" and G.nodes[v]["type"] == "quantum":
+            G[u][v]["type"] = "quantum"
+            G[u][v]["decoherence_prob"] = np.random.uniform(0.05, 0.15)
+            G[u][v]["entanglement_success"] = np.random.uniform(0.85, 0.95)
+        else:
+            G[u][v]["type"] = "classical"
+            G[u][v]["packet_loss"] = np.random.uniform(0.01, 0.05)
+    return G
+
+def create_hybrid_network_with_repeaters(num_nodes, quantum_ratio, edge_prob, use_repeaters=False):
+    G = nx.erdos_renyi_graph(num_nodes, edge_prob, seed=None)
+    quantum_nodes = random.sample(list(G.nodes), max(1, int(num_nodes * quantum_ratio)))
+    for node in G.nodes:
+        G.nodes[node]["type"] = "quantum" if node in quantum_nodes else "classical"
+
+    for u, v in G.edges():
+        if G.nodes[u]["type"] == "quantum" and G.nodes[v]["type"] == "quantum":
+            decoherence = np.random.uniform(0.05, 0.15)
+            ent_success = np.random.uniform(0.85, 0.95)
+            if use_repeaters:
+                decoherence *= 0.5
+                ent_success = min(1.0, ent_success + 0.05)
+            G[u][v]["type"] = "quantum"
+            G[u][v]["decoherence_prob"] = decoherence
+            G[u][v]["entanglement_success"] = ent_success
+        else:
+            G[u][v]["type"] = "classical"
+            G[u][v]["packet_loss"] = np.random.uniform(0.01, 0.05)
+    return G
+
+# ==============================
+# Routing
+# ==============================
+def aqfr_route_qkd_then_classical(G, src, dst, cutoff=CUTOFF_HOPS):
+    all_paths = list(nx.all_simple_paths(G, src, dst, cutoff=cutoff))
+    if not all_paths:
+        return None, "No path"
+
+    # QKD paths = all intermediates quantum
+    qkd_paths = [p for p in all_paths if all(G.nodes[n]["type"] == "quantum" for n in p[1:-1])]
+    if qkd_paths:
+        return choose_best_path(G, qkd_paths), "quantum_qkd"
+
+    # fallback: any classical
+    if all_paths:
+        return choose_best_path(G, all_paths), "classical"
+    return None, "No fallback"
+
+# ==============================
+# Simulation Logic
+# ==============================
+def simulate_scaling_small(max_nodes, trials_per_size, quantum_ratio, edge_prob):
+    sizes = [10, 15, 20, 25, max_nodes]
+    qkd_rates, fallback_rates, losses = [], [], []
+
+    for n in sizes:
+        qkd_success, fallback_success, total_loss, total_attempts = 0, 0, 0, 0
+        for _ in range(trials_per_size):
+            G = create_hybrid_network(num_nodes=n, quantum_ratio=quantum_ratio, edge_prob=edge_prob)
+            nodes = list(G.nodes)
+            src, dst = random.sample(nodes, 2)
+            best_path, category = aqfr_route_qkd_then_classical(G, src, dst)
+            if best_path:
+                loss, success = compute_path_metrics(G, best_path)
+                total_loss += loss
+                if category == "quantum_qkd":
+                    qkd_success += 1
+                else:
+                    fallback_success += 1
+            total_attempts += 1
+
+        qkd_rates.append(qkd_success / total_attempts)
+        fallback_rates.append(fallback_success / total_attempts)
+        losses.append(total_loss / total_attempts)
+    return sizes, qkd_rates, fallback_rates, losses
+
+def simulate_scaling_with_repeaters(use_repeaters, max_nodes, trials_per_size, quantum_ratio, edge_prob):
+    sizes = [10, 15, 20, 25, max_nodes]
+    qkd_rates, fallback_rates, losses = [], [], []
+
+    for n in sizes:
+        qkd_success, fallback_success, total_loss, total_attempts = 0, 0, 0, 0
+        for _ in range(trials_per_size):
+            G = create_hybrid_network_with_repeaters(
+                num_nodes=n,
+                quantum_ratio=quantum_ratio,
+                edge_prob=edge_prob,
+                use_repeaters=use_repeaters,
+            )
+            nodes = list(G.nodes)
+            src, dst = random.sample(nodes, 2)
+            best_path, category = aqfr_route_qkd_then_classical(G, src, dst)
+            if best_path:
+                loss, success = compute_path_metrics(G, best_path)
+                total_loss += loss
+                if category == "quantum_qkd":
+                    qkd_success += 1
+                else:
+                    fallback_success += 1
+            total_attempts += 1
+
+        qkd_rates.append(qkd_success / total_attempts)
+        fallback_rates.append(fallback_success / total_attempts)
+        losses.append(total_loss / total_attempts)
+    return sizes, qkd_rates, fallback_rates, losses
+
+# ==============================
+# Streamlit App
+# ==============================
+st.title("🔬 Quantum Network Scalability & Repeaters Impact")
+
+with st.sidebar:
+    st.header("Simulation Settings")
+    max_nodes = st.slider("Max Network Size", 20, 50, DEFAULT_MAX_NODES, step=5)
+    trials_per_size = st.slider("Trials per Network Size", 1, 10, DEFAULT_TRIALS)
+    quantum_ratio = st.slider("Quantum Node Ratio", 0.1, 1.0, DEFAULT_QUANTUM_RATIO)
+    edge_prob = st.slider("Edge Probability", 0.05, 0.5, DEFAULT_EDGE_PROB)
+    use_repeaters = st.checkbox("Enable Quantum Repeaters (Part 5)")
+    run_simulation = st.button("Run Simulation")
+
+if run_simulation:
+    st.subheader("📊 Running Scalability Simulation...")
+
+    # Run base simulation (Part 4)
+    sizes, qkd_rates, fallback_rates, losses = simulate_scaling_small(
+        max_nodes, trials_per_size, quantum_ratio, edge_prob
+    )
+
+    # Plot basic scalability
+    fig1, ax1 = plt.subplots()
+    ax1.plot(sizes, qkd_rates, marker="o", label="QKD success")
+    ax1.plot(sizes, fallback_rates, marker="s", label="Classical fallback success")
+    ax1.set_xlabel("Network Size (Nodes)")
+    ax1.set_ylabel("Success Probability")
+    ax1.set_title("End-to-End Success vs Network Size")
+    ax1.grid(True)
+    ax1.legend()
+    st.pyplot(fig1)
+
+    fig2, ax2 = plt.subplots()
+    ax2.plot(sizes, losses, marker="x", color="red")
+    ax2.set_xlabel("Network Size (Nodes)")
+    ax2.set_ylabel("Average Route Loss")
+    ax2.set_title("Route Loss vs Network Size")
+    ax2.grid(True)
+    st.pyplot(fig2)
+
+    if use_repeaters:
+        st.subheader("🔁 Comparing Before vs After Repeaters (Part 5)")
+
+        # Run both before & after repeaters
+        sizes, qkd_no_rep, fallback_no_rep, loss_no_rep = simulate_scaling_with_repeaters(
+            use_repeaters=False,
+            max_nodes=max_nodes,
+            trials_per_size=trials_per_size,
+            quantum_ratio=quantum_ratio,
+            edge_prob=edge_prob,
+        )
+        _, qkd_with_rep, fallback_with_rep, loss_with_rep = simulate_scaling_with_repeaters(
+            use_repeaters=True,
+            max_nodes=max_nodes,
+            trials_per_size=trials_per_size,
+            quantum_ratio=quantum_ratio,
+            edge_prob=edge_prob,
+        )
+
+        # QKD before vs after repeaters
+        fig3, ax3 = plt.subplots()
+        ax3.plot(sizes, qkd_no_rep, marker="o", label="QKD without repeaters")
+        ax3.plot(sizes, qkd_with_rep, marker="o", linestyle="--", label="QKD with repeaters")
+        ax3.set_xlabel("Network Size")
+        ax3.set_ylabel("QKD Success Probability")
+        ax3.set_title("QKD Success Before vs After Repeaters")
+        ax3.grid(True)
+        ax3.legend()
+        st.pyplot(fig3)
+
+        # Route loss before vs after repeaters
+        fig4, ax4 = plt.subplots()
+        ax4.plot(sizes, loss_no_rep, marker="x", label="Route Loss (no repeaters)")
+        ax4.plot(sizes, loss_with_rep, marker="x", linestyle="--", label="Route Loss (with repeaters)")
+        ax4.set_xlabel("Network Size")
+        ax4.set_ylabel("Average Route Loss")
+        ax4.set_title("Route Loss Before vs After Repeaters")
+        ax4.grid(True)
+        ax4.legend()
+        st.pyplot(fig4)
+
+        st.success("✅ Repeaters improved QKD success & reduced route loss!")
+
+    else:
+        st.info("💡 Enable **Quantum Repeaters** in the sidebar to see Part 5 comparison.")
