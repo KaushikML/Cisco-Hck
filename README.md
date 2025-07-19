@@ -1,105 +1,41 @@
-Design and Simulate a Scalable Quantum-Classical Hybrid Network for the Future 
+# AQFR – Quantum-Only-Intermediates Routing Demo
 
-Internet
+This is a Streamlit application that demonstrates an "Adaptive Quantum-First Routing" (AQFR) algorithm for a hybrid quantum-classical network. The simulation allows you to:
 
-Background
-Quantum networking is poised to revolu4onize communica4on, but faces major 
+*   Generate a hybrid network with a specified number of nodes and a ratio of quantum to classical nodes.
+*   Visualize the network topology, with different colors for quantum and classical nodes and links.
+*   Find the best path between two classical nodes, with the constraint that all intermediate nodes must be quantum-only.
+*   Compare the AQFR path with the shortest classical-only path.
+*   Adjust the weights for different cost metrics (hops, distance, reliability, latency) to see how they affect the path selection.
 
-challenges: qubit fragility, signal loss, scalability, integra4on with classical networks, and 
-lack of standardiza4on245. Most real-world quantum networks will be hybrid—
-combining quantum and classical elements. Understanding these challenges is crucial, 
-even for those with only basic knowledge of qubits and superposi4on5.
+## How to run the application
 
-Problem Statement
-Design, simulate, and analyze a scalable hybrid network architecture that integrates 
-quantum and classical nodes. You will address prac4cal networking challenges - like 
-signal loss, decoherence, interoperability, and scalability - using simula4on and crea4ve 
-protocol design.
+1.  Install the required libraries:
+    ```
+    pip install streamlit networkx matplotlib numpy
+    ```
+2.  Run the Streamlit application:
+    ```
+    streamlit run app.py
+    ```
 
-No QKD or advanced quantum protocol implementaEon is required. Only an 
-introducEon to qubits, entanglement, and superposiEon is assumed.
+## Features and Parameters
 
-Problem Parts
-Part 1: Network Topology and Node SimulaEon
-a) Design a network with at least 10 nodes: some classical, some quantum-capable 
-(suppor4ng qubits and entanglement).
+### Network Generation
 
-b) Simulate the network using Python and a library like networkx (for topology and 
-rou4ng), adding simple quantum aOributes to nodes (e.g., “can store 
-entanglement”).
+*   **Seed**: A random seed for reproducibility.
+*   **Nodes**: The total number of nodes in the network.
+*   **Quantum ratio**: The proportion of quantum nodes in the network.
 
-c) Visualize the topology, labeling quantum and classical nodes.
-Deliverable:
-• Python code for network crea4on and visualiza4on
-• Diagram of the hybrid network
+### Routing
 
-Part 2: SimulaEng Quantum Networking Challenges
-For quantum links, simulate:
-a) Decoherence: Each quantum link has a probability of “qubit loss” over distance.
+The application implements an AQFR algorithm that prioritizes paths with quantum-only intermediate nodes. It first looks for a "Quantum-QKD" path, and if that's not available, it falls back to a classical path. The cost function for path selection is a weighted sum of hops, distance, reliability, and latency.
 
-b) No-Cloning: Quantum data cannot be copied or amplified; simulate failed 
-transmission if amplifica4on is aOempted.
-Cisco Confiden+al
+### Visualization
 
-c) Entanglement DistribuEon: Simulate entanglement swapping between quantum 
-nodes, with a probability of failure.
+The network is visualized using Matplotlib, with:
 
-d) For classical links, simulate standard packet loss and latency.
-Deliverable:
-• Simula4on code for link behavior
-• Report/plots showing how quantum and classical links behave differently as 
-network size/distance increases
-
-Part 3: Protocol Design for Hybrid RouEng
-
-a) Design a rou4ng protocol that:
-
-b) Uses quantum links when available, but falls back to classical links if quantum 
-transmission fails.
-
-c) Priori4zes shortest path but considers quantum link reliability.
-
-d) Handles interoperability between quantum and classical nodes (e.g., protocol 
-transla4on).
-
-Deliverable:
-• Protocol descrip4on (algorithm or flowchart)
-• Implementa4on in Python (pseudo-code or code)
-
-o Example: send a message from Node A to Node H, showing path selec4on 
-and fallback
-
-Part 4: Scalability and StandardizaEon Analysis
-Simulate the network as you increase the number of nodes and links.
-
-• Analyze:
-o How does the probability of successful end-to-end quantum 
-communica4on change?
-o What are the boOlenecks for scaling up?
-o What interoperability/standardiza4on issues arise (e.g., protocol 
-mismatches, lack of shared standards)?
-
-Deliverable:
-a) Plots/graphs showing scalability trends
-b) WriOen analysis of technical and standardiza4on challenges
-
-Part 5: CreaEve Extension (Bonus)
-a) Propose and simulate one innova4ve solu4on to a major boOleneck (e.g., using 
-quantum repeaters, error correc4on, or a new hybrid protocol).
-b) Analyze its impact on network performance.
-
-Deliverable:
-• Descrip4on and simula4on code for your solu4on
-Cisco Confiden+al
-Cisco Confiden+al
-
-• Compara4ve results (before/acer)
-
-Part 6: Design a simple key PKI without public keys
-Imagine its 2030 and quantum computers have become ubiquitous. With the advent of quantum 
-compu;ng, public key cryptography has broken down. 
-A) Design a system for key exchange using symmetric keys so that communica;on between people 
-can be secured without others being able to eavesdrop on it. Assume that there are 25 people in 
-a group and communica;on between any 2 cannot be seen in clear by the other 23.
-B) Propose mul;ple op;ons and compare the tradeoffs between them. 
-C) Implement one of the op;ons to solve the problem stated in A.
+*   Quantum nodes in sky blue and classical nodes in orange.
+*   Quantum links in cyan, classical links in grey, and hybrid links in purple/magenta.
+*   The AQFR path is highlighted in red.
+*   The shortest classical-only path is highlighted with a dashed green line.
